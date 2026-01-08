@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Password Manager Autofill</title>
+    <style>
+      body { margin: 0; font: 13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; width: 320px; }
+      .wrap { padding: 12px; }
+      .title { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+      .row { margin: 10px 0; }
+      select, button { width: 100%; padding: 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.2); }
+      button { cursor: pointer; background: #101826; color: #e9f4ff; border: none; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .hint { font-size: 12px; opacity: 0.8; line-height: 1.35; }
+      .status { margin-top: 8px; padding: 8px; border-radius: 10px; background: rgba(0,0,0,0.05); }
+      .ok { color: #0b6; font-weight: 600; }
+      .bad { color: #b30; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="title">Password Manager Autofill</div>
+
+      <div class="row">
+        <label class="hint">Профиль (должен быть открыт и активен в приложении)</label>
+        <select id="profiles"></select>
+      </div>
+
+      <div class="row status" id="status">Загрузка…</div>
+
+      <div class="row">
+        <button id="refresh">Обновить</button>
+      </div>
+
+      <div class="hint">
+        Список логинов появляется при фокусе (клик/Tab) на поле e-mail/логина. Пароль подставляется только после выбора пункта.
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
