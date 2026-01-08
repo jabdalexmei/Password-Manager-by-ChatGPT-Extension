@@ -1,0 +1,440 @@
+diff --git a/dist/firefox/manifest.json b/dist/firefox/manifest.json
+index 8218bd4..fbd243f 100644
+--- a/dist/firefox/manifest.json
++++ b/dist/firefox/manifest.json
+@@ -30,7 +30,9 @@
+       "js": [
+         "content.js"
+       ],
+-      "run_at": "document_idle"
++      "run_at": "document_idle",
++      "all_frames": true,
++      "match_about_blank": true
+     }
+   ],
+   "browser_specific_settings": {
+diff --git a/dist/chrome/manifest.json b/dist/chrome/manifest.json
+index dda47c2..2e914d2 100644
+--- a/dist/chrome/manifest.json
++++ b/dist/chrome/manifest.json
+@@ -27,7 +27,9 @@
+       "js": [
+         "content.js"
+       ],
+-      "run_at": "document_idle"
++      "run_at": "document_idle",
++      "all_frames": true,
++      "match_about_blank": true
+     }
+   ],
+   "action": {
+diff --git a/dist/firefox/content.js b/dist/firefox/content.js
+index ec24539..2adf898 100644
+--- a/dist/firefox/content.js
++++ b/dist/firefox/content.js
+@@ -3,9 +3,6 @@
+   return chrome;
+ })();
+ 
+-if (window.top !== window) {
+-  // MVP: ignore iframes.
+-} else {
+   const UI_Z = 2147483647;
+ 
+   function isVisibleInput(el) {
+@@ -26,6 +23,50 @@
+     const hints = (el.name + " " + el.id + " " + (el.placeholder || "")).toLowerCase();
+     return /(user|login|email|mail|account)/.test(hints);
+   }
++
++  function isPasswordField(el) {
++    if (!isVisibleInput(el)) return false;
++    return (el.type || "").toLowerCase() === "password";
++  }
++
++  function findUsernameFieldFromPassword(pwEl) {
++    const form = pwEl.form || pwEl.closest("form");
++    const candidates = [];
++
++    const collect = (root) => {
++      if (!root) return;
++      const nodes = root.querySelectorAll("input");
++      for (const n of nodes) {
++        if (!isVisibleInput(n)) continue;
++        if (isUsernameField(n)) candidates.push(n);
++      }
++    };
++
++    if (form) collect(form);
++    if (candidates.length === 0) {
++      const container = pwEl.closest("main, section, article, div") || document;
++      collect(container);
++    }
++    if (candidates.length === 0) return null;
++
++    const pwRect = pwEl.getBoundingClientRect();
++    let best = candidates[0];
++    let bestScore = Number.POSITIVE_INFINITY;
++
++    for (const c of candidates) {
++      const r = c.getBoundingClientRect();
++      const dy = Math.abs(r.top - pwRect.top);
++      const dx = Math.abs(r.left - pwRect.left);
++      const score = dy * 10 + dx + (r.bottom <= pwRect.top ? -1000 : 0);
++      if (score < bestScore) {
++        bestScore = score;
++        best = c;
++      }
++    }
++
++    return best;
++  }
+ 
+   function findPasswordField(usernameEl) {
+     const form = usernameEl.form || usernameEl.closest("form");
+@@ -84,8 +125,10 @@
+   }
+ 
+   let uiRoot = null;
+-  let currentTarget = null;
++  let currentUsernameTarget = null;
++  let currentPasswordTarget = null;
++  let currentAnchorTarget = null;
+   let lastOrigin = null;
+ 
+   function closeUi() {
+     uiRoot?.remove();
+     uiRoot = null;
+-    currentTarget = null;
++    currentUsernameTarget = null;
++    currentPasswordTarget = null;
++    currentAnchorTarget = null;
+     lastOrigin = null;
+   }
+ 
+@@ -116,8 +159,16 @@
+ 
+   function renderUi(target, items, message) {
+     closeUi();
+-    currentTarget = target;
+     lastOrigin = location.origin;
++
++    currentAnchorTarget = target;
++    if (isPasswordField(target)) {
++      currentPasswordTarget = target;
++      currentUsernameTarget = findUsernameFieldFromPassword(target);
++    } else {
++      currentUsernameTarget = target;
++      currentPasswordTarget = findPasswordField(target);
++    }
+ 
+     uiRoot = document.createElement("div");
+     uiRoot.style.position = "fixed";
+@@ -222,8 +273,10 @@
+   }
+ 
+   async function onPickCredential(item) {
+-    const target = currentTarget;
+-    if (!target) return;
++    const anchor = currentAnchorTarget;
++    const u = currentUsernameTarget;
++    const p = currentPasswordTarget;
++    if (!anchor && !u && !p) return;
+ 
+     const origin = lastOrigin || location.origin;
+ 
+@@ -238,7 +291,7 @@
+         credentialId: item.id,
+       });
+     } catch (_e) {
+-      renderUi(target, [], "Ошибка связи с расширением.");
++      renderUi(anchor || u || p, [], "Ошибка связи с расширением.");
+       return;
+     }
+ 
+@@ -247,17 +300,17 @@
+     if (!resp?.ok) {
+       const code = resp?.error?.code || "ERR";
+       if (code === "LOCKED") {
+-        renderUi(target, [], "Профиль заблокирован. Откройте приложение и разблокируйте профиль.");
++        renderUi(anchor || u || p, [], "Профиль заблокирован. Откройте приложение и разблокируйте профиль.");
+       } else if (code === "APP_NOT_RUNNING" || code === "NATIVE_HOST_ERROR") {
+-        renderUi(target, [], "Приложение не запущено или native host не настроен.");
++        renderUi(anchor || u || p, [], "Приложение не запущено или native host не настроен.");
+       } else if (code === "ORIGIN_MISMATCH") {
+-        renderUi(target, [], "Домен не совпадает с записью. Подстановка отменена.");
++        renderUi(anchor || u || p, [], "Домен не совпадает с записью. Подстановка отменена.");
+       } else if (code === "NO_PROFILE") {
+-        renderUi(target, [], "Не выбран профиль. Откройте popup расширения и выберите профиль.");
++        renderUi(anchor || u || p, [], "Не выбран профиль. Откройте popup расширения и выберите профиль.");
+       } else {
+-        renderUi(target, [], `Ошибка: ${code}`);
++        renderUi(anchor || u || p, [], `Ошибка: ${code}`);
+       }
+       return;
+     }
+@@ -265,7 +318,7 @@
+     const { username, password } = resp.result || {};
+     if (typeof username !== "string" || typeof password !== "string") {
+-      renderUi(target, [], "Некорректный ответ от приложения.");
++      renderUi(anchor || u || p, [], "Некорректный ответ от приложения.");
+       return;
+     }
+ 
+-    target.focus({ preventScroll: true });
+-    target.value = username;
+-    dispatchValueEvents(target);
+-
+-    const pw = findPasswordField(target);
+-    if (pw) {
+-      pw.focus({ preventScroll: true });
+-      pw.value = password;
+-      dispatchValueEvents(pw);
+-    }
++    if (u) {
++      u.focus({ preventScroll: true });
++      u.value = username;
++      dispatchValueEvents(u);
++    }
++
++    if (p) {
++      p.focus({ preventScroll: true });
++      p.value = password;
++      dispatchValueEvents(p);
++    }
+ 
+     // Drop references
+     resp = null;
+@@ -276,7 +329,7 @@
+ 
+   document.addEventListener("focusin", (e) => {
+     const el = e.target;
+-    if (!isUsernameField(el)) return;
++    if (!(isUsernameField(el) || isPasswordField(el))) return;
+ 
+     if (focusTimer) clearTimeout(focusTimer);
+     focusTimer = setTimeout(async () => {
+@@ -264,11 +320,11 @@
+   });
+ 
+   window.addEventListener("scroll", () => {
+-    if (uiRoot && currentTarget) positionUi(currentTarget);
++    if (uiRoot && currentAnchorTarget) positionUi(currentAnchorTarget);
+   }, true);
+ 
+   window.addEventListener("resize", () => {
+-    if (uiRoot && currentTarget) positionUi(currentTarget);
++    if (uiRoot && currentAnchorTarget) positionUi(currentAnchorTarget);
+   });
+ 
+   document.addEventListener("mousedown", (e) => {
+@@ -278,4 +334,3 @@
+   document.addEventListener("keydown", (e) => {
+     if (e.key === "Escape") closeUi();
+   });
+-}
+diff --git a/dist/chrome/content.js b/dist/chrome/content.js
+index ec24539..2adf898 100644
+--- a/dist/chrome/content.js
++++ b/dist/chrome/content.js
+@@ -3,9 +3,6 @@
+   return chrome;
+ })();
+ 
+-if (window.top !== window) {
+-  // MVP: ignore iframes.
+-} else {
+   const UI_Z = 2147483647;
+ 
+   function isVisibleInput(el) {
+@@ -26,6 +23,50 @@
+     const hints = (el.name + " " + el.id + " " + (el.placeholder || "")).toLowerCase();
+     return /(user|login|email|mail|account)/.test(hints);
+   }
++
++  function isPasswordField(el) {
++    if (!isVisibleInput(el)) return false;
++    return (el.type || "").toLowerCase() === "password";
++  }
++
++  function findUsernameFieldFromPassword(pwEl) {
++    const form = pwEl.form || pwEl.closest("form");
++    const candidates = [];
++
++    const collect = (root) => {
++      if (!root) return;
++      const nodes = root.querySelectorAll("input");
++      for (const n of nodes) {
++        if (!isVisibleInput(n)) continue;
++        if (isUsernameField(n)) candidates.push(n);
++      }
++    };
++
++    if (form) collect(form);
++    if (candidates.length === 0) {
++      const container = pwEl.closest("main, section, article, div") || document;
++      collect(container);
++    }
++    if (candidates.length === 0) return null;
++
++    const pwRect = pwEl.getBoundingClientRect();
++    let best = candidates[0];
++    let bestScore = Number.POSITIVE_INFINITY;
++
++    for (const c of candidates) {
++      const r = c.getBoundingClientRect();
++      const dy = Math.abs(r.top - pwRect.top);
++      const dx = Math.abs(r.left - pwRect.left);
++      const score = dy * 10 + dx + (r.bottom <= pwRect.top ? -1000 : 0);
++      if (score < bestScore) {
++        bestScore = score;
++        best = c;
++      }
++    }
++
++    return best;
++  }
+ 
+   function findPasswordField(usernameEl) {
+     const form = usernameEl.form || usernameEl.closest("form");
+@@ -84,8 +125,10 @@
+   }
+ 
+   let uiRoot = null;
+-  let currentTarget = null;
++  let currentUsernameTarget = null;
++  let currentPasswordTarget = null;
++  let currentAnchorTarget = null;
+   let lastOrigin = null;
+ 
+   function closeUi() {
+     uiRoot?.remove();
+     uiRoot = null;
+-    currentTarget = null;
++    currentUsernameTarget = null;
++    currentPasswordTarget = null;
++    currentAnchorTarget = null;
+     lastOrigin = null;
+   }
+ 
+@@ -116,8 +159,16 @@
+ 
+   function renderUi(target, items, message) {
+     closeUi();
+-    currentTarget = target;
+     lastOrigin = location.origin;
++
++    currentAnchorTarget = target;
++    if (isPasswordField(target)) {
++      currentPasswordTarget = target;
++      currentUsernameTarget = findUsernameFieldFromPassword(target);
++    } else {
++      currentUsernameTarget = target;
++      currentPasswordTarget = findPasswordField(target);
++    }
+ 
+     uiRoot = document.createElement("div");
+     uiRoot.style.position = "fixed";
+@@ -222,8 +273,10 @@
+   }
+ 
+   async function onPickCredential(item) {
+-    const target = currentTarget;
+-    if (!target) return;
++    const anchor = currentAnchorTarget;
++    const u = currentUsernameTarget;
++    const p = currentPasswordTarget;
++    if (!anchor && !u && !p) return;
+ 
+     const origin = lastOrigin || location.origin;
+ 
+@@ -238,7 +291,7 @@
+         credentialId: item.id,
+       });
+     } catch (_e) {
+-      renderUi(target, [], "Ошибка связи с расширением.");
++      renderUi(anchor || u || p, [], "Ошибка связи с расширением.");
+       return;
+     }
+ 
+@@ -247,17 +300,17 @@
+     if (!resp?.ok) {
+       const code = resp?.error?.code || "ERR";
+       if (code === "LOCKED") {
+-        renderUi(target, [], "Профиль заблокирован. Откройте приложение и разблокируйте профиль.");
++        renderUi(anchor || u || p, [], "Профиль заблокирован. Откройте приложение и разблокируйте профиль.");
+       } else if (code === "APP_NOT_RUNNING" || code === "NATIVE_HOST_ERROR") {
+-        renderUi(target, [], "Приложение не запущено или native host не настроен.");
++        renderUi(anchor || u || p, [], "Приложение не запущено или native host не настроен.");
+       } else if (code === "ORIGIN_MISMATCH") {
+-        renderUi(target, [], "Домен не совпадает с записью. Подстановка отменена.");
++        renderUi(anchor || u || p, [], "Домен не совпадает с записью. Подстановка отменена.");
+       } else if (code === "NO_PROFILE") {
+-        renderUi(target, [], "Не выбран профиль. Откройте popup расширения и выберите профиль.");
++        renderUi(anchor || u || p, [], "Не выбран профиль. Откройте popup расширения и выберите профиль.");
+       } else {
+-        renderUi(target, [], `Ошибка: ${code}`);
++        renderUi(anchor || u || p, [], `Ошибка: ${code}`);
+       }
+       return;
+     }
+@@ -265,7 +318,7 @@
+     const { username, password } = resp.result || {};
+     if (typeof username !== "string" || typeof password !== "string") {
+-      renderUi(target, [], "Некорректный ответ от приложения.");
++      renderUi(anchor || u || p, [], "Некорректный ответ от приложения.");
+       return;
+     }
+ 
+-    target.focus({ preventScroll: true });
+-    target.value = username;
+-    dispatchValueEvents(target);
+-
+-    const pw = findPasswordField(target);
+-    if (pw) {
+-      pw.focus({ preventScroll: true });
+-      pw.value = password;
+-      dispatchValueEvents(pw);
+-    }
++    if (u) {
++      u.focus({ preventScroll: true });
++      u.value = username;
++      dispatchValueEvents(u);
++    }
++
++    if (p) {
++      p.focus({ preventScroll: true });
++      p.value = password;
++      dispatchValueEvents(p);
++    }
+ 
+     // Drop references
+     resp = null;
+@@ -276,7 +329,7 @@
+ 
+   document.addEventListener("focusin", (e) => {
+     const el = e.target;
+-    if (!isUsernameField(el)) return;
++    if (!(isUsernameField(el) || isPasswordField(el))) return;
+ 
+     if (focusTimer) clearTimeout(focusTimer);
+     focusTimer = setTimeout(async () => {
+@@ -264,11 +320,11 @@
+   });
+ 
+   window.addEventListener("scroll", () => {
+-    if (uiRoot && currentTarget) positionUi(currentTarget);
++    if (uiRoot && currentAnchorTarget) positionUi(currentAnchorTarget);
+   }, true);
+ 
+   window.addEventListener("resize", () => {
+-    if (uiRoot && currentTarget) positionUi(currentTarget);
++    if (uiRoot && currentAnchorTarget) positionUi(currentAnchorTarget);
+   });
+ 
+   document.addEventListener("mousedown", (e) => {
+@@ -278,4 +334,3 @@
+   document.addEventListener("keydown", (e) => {
+     if (e.key === "Escape") closeUi();
+   });
+-}
